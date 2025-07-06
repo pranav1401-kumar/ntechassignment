@@ -1,3 +1,4 @@
+
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const GitHubStrategy = require('passport-github2').Strategy;
@@ -7,15 +8,29 @@ const { models } = require('./database');
 
 /**
  * OAuth2 Configuration for multiple providers
- * Supports Google, GitHub, Microsoft, and Apple authentication
+ * Updated to handle production and development environments correctly
  */
+
+// Get the correct base URL for callbacks
+const getBaseUrl = () => {
+  if (process.env.NODE_ENV === 'production') {
+    return process.env.BASE_URL || 'https://ntechassignment-production.up.railway.app';
+  }
+  return process.env.BASE_URL || 'http://localhost:5000';
+};
+
+const BASE_URL = getBaseUrl();
+console.log('OAuth Base URL:', BASE_URL);
 
 // Google OAuth2 Strategy
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  const googleCallbackURL = `${BASE_URL}/api/auth/google/callback`;
+  console.log('Google Callback URL:', googleCallbackURL);
+  
   passport.use('google', new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: "/api/auth/google/callback",
+    callbackURL: googleCallbackURL,
     scope: ['profile', 'email']
   }, async (accessToken, refreshToken, profile, done) => {
     try {
@@ -96,10 +111,13 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
 
 // GitHub OAuth2 Strategy
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+  const githubCallbackURL = `${BASE_URL}/api/auth/github/callback`;
+  console.log('GitHub Callback URL:', githubCallbackURL);
+  
   passport.use('github', new GitHubStrategy({
     clientID: process.env.GITHUB_CLIENT_ID,
     clientSecret: process.env.GITHUB_CLIENT_SECRET,
-    callbackURL: "/api/auth/github/callback",
+    callbackURL: githubCallbackURL,
     scope: ['user:email']
   }, async (accessToken, refreshToken, profile, done) => {
     try {
@@ -180,10 +198,13 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
 
 // Microsoft OAuth2 Strategy
 if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
+  const microsoftCallbackURL = `${BASE_URL}/api/auth/microsoft/callback`;
+  console.log('Microsoft Callback URL:', microsoftCallbackURL);
+  
   passport.use('microsoft', new MicrosoftStrategy({
     clientID: process.env.MICROSOFT_CLIENT_ID,
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
-    callbackURL: "/api/auth/microsoft/callback",
+    callbackURL: microsoftCallbackURL,
     scope: ['user.read'],
     tenant: 'common' // Allow both personal and work accounts
   }, async (accessToken, refreshToken, profile, done) => {
@@ -262,91 +283,6 @@ if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
   }));
 }
 
-// Apple OAuth2 Strategy (Sign in with Apple)
-if (process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY) {
-  passport.use('apple', new AppleStrategy({
-    clientID: process.env.APPLE_CLIENT_ID,
-    teamID: process.env.APPLE_TEAM_ID,
-    keyID: process.env.APPLE_KEY_ID,
-    privateKey: process.env.APPLE_PRIVATE_KEY,
-    callbackURL: "/api/auth/apple/callback",
-    scope: ['name', 'email']
-  }, async (accessToken, refreshToken, idToken, profile, done) => {
-    try {
-      console.log('Apple OAuth Profile:', {
-        id: profile.id,
-        email: profile.email,
-        name: profile.name
-      });
-
-      const email = profile.email;
-      if (!email) {
-        return done(new Error('No email found in Apple profile'), null);
-      }
-
-      // Check if user already exists
-      let user = await models.User.findOne({
-        where: { email },
-        include: [{
-          model: models.Role,
-          as: 'role',
-          attributes: ['name', 'permissions']
-        }]
-      });
-
-      if (user) {
-        // Update Apple ID if not already set
-        if (!user.appleId) {
-          await user.update({
-            appleId: profile.id,
-            isVerified: true
-          });
-        }
-
-        // Update last login
-        await user.update({ lastLogin: new Date() });
-
-        return done(null, user);
-      }
-
-      // Create new user
-      const defaultRole = await models.Role.findOne({ where: { name: 'VIEWER' } });
-      if (!defaultRole) {
-        return done(new Error('Default role not found'), null);
-      }
-
-      const firstName = profile.name?.firstName || 'User';
-      const lastName = profile.name?.lastName || 'User';
-
-      user = await models.User.create({
-        email,
-        firstName,
-        lastName,
-        appleId: profile.id,
-        isVerified: true,
-        isActive: true,
-        roleId: defaultRole.id,
-        lastLogin: new Date(),
-        password: null
-      });
-
-      // Fetch user with role for response
-      const userWithRole = await models.User.findByPk(user.id, {
-        include: [{
-          model: models.Role,
-          as: 'role',
-          attributes: ['name', 'permissions']
-        }]
-      });
-
-      return done(null, userWithRole);
-    } catch (error) {
-      console.error('Apple OAuth Error:', error);
-      return done(error, null);
-    }
-  }));
-}
-
 // Serialize user for session
 passport.serializeUser((user, done) => {
   done(null, user.id);
@@ -376,8 +312,7 @@ passport.deserializeUser(async (id, done) => {
  * @returns {string} OAuth login URL
  */
 const getOAuthLoginUrl = (provider) => {
-  const baseUrl = process.env.BASE_URL || 'https://ntechassignment-production.up.railway.app';
-  return `${baseUrl}/api/auth/${provider}`;
+  return `${BASE_URL}/api/auth/${provider}`;
 };
 
 /**
@@ -422,12 +357,8 @@ const getOAuthConfig = () => {
       acc[provider] = getOAuthLoginUrl(provider);
       return acc;
     }, {}),
-    clientIds: {
-      google: process.env.GOOGLE_CLIENT_ID,
-      github: process.env.GITHUB_CLIENT_ID,
-      microsoft: process.env.MICROSOFT_CLIENT_ID,
-      apple: process.env.APPLE_CLIENT_ID
-    }
+    baseUrl: BASE_URL,
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000'
   };
 };
 
@@ -469,21 +400,24 @@ const handleOAuthSuccess = async (req, res) => {
     await tokenService.saveRefreshToken(user.id, refreshToken);
 
     // Log successful OAuth login
-    await models.LoginLog.create({
-      userId: user.id,
-      ipAddress: req.ip || req.connection.remoteAddress,
-      userAgent: req.get('User-Agent'),
-      loginMethod: req.route?.path?.includes('google') ? 'google' : 
-                   req.route?.path?.includes('github') ? 'github' :
-                   req.route?.path?.includes('microsoft') ? 'microsoft' :
-                   req.route?.path?.includes('apple') ? 'apple' : 'oauth',
-      success: true
-    });
+    if (models.LoginLog) {
+      await models.LoginLog.create({
+        userId: user.id,
+        ipAddress: req.ip || req.connection.remoteAddress,
+        userAgent: req.get('User-Agent'),
+        loginMethod: req.route?.path?.includes('google') ? 'google' : 
+                     req.route?.path?.includes('github') ? 'github' :
+                     req.route?.path?.includes('microsoft') ? 'microsoft' :
+                     req.route?.path?.includes('apple') ? 'apple' : 'oauth',
+        success: true
+      });
+    }
 
     // Redirect to frontend with tokens
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const redirectUrl = `${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}`;
     
+    console.log('OAuth Success - Redirecting to:', redirectUrl);
     res.redirect(redirectUrl);
   } catch (error) {
     console.error('OAuth success handler error:', error);
@@ -498,5 +432,6 @@ module.exports = {
   getConfiguredProviders,
   getOAuthConfig,
   handleOAuthError,
-  handleOAuthSuccess
+  handleOAuthSuccess,
+  BASE_URL
 };
