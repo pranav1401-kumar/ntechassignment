@@ -376,7 +376,7 @@ passport.deserializeUser(async (id, done) => {
  * @returns {string} OAuth login URL
  */
 const getOAuthLoginUrl = (provider) => {
-  const baseUrl = process.env.BASE_URL || 'http://localhost:5000';
+  const baseUrl = process.env.BASE_URL || 'https://ntechassignment-production.up.railway.app';
   return `${baseUrl}/api/auth/${provider}`;
 };
 
