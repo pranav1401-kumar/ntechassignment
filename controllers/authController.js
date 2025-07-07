@@ -200,13 +200,15 @@ class AuthController {
       await tokenService.saveRefreshToken(user.id, refreshToken);
 
       // Log successful login
-      await models.LoginLog.create({
-        userId: user.id,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        loginMethod: 'email',
-        success: true
-      });
+      if (models.LoginLog) {
+        await models.LoginLog.create({
+          userId: user.id,
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          loginMethod: 'email',
+          success: true
+        });
+      }
 
       res.json({
         success: true,
@@ -312,16 +314,18 @@ class AuthController {
       await tokenService.revokeRefreshToken(userId);
 
       // Log logout in login logs
-      const lastLoginLog = await models.LoginLog.findOne({
-        where: { userId, logoutTime: null },
-        order: [['createdAt', 'DESC']]
-      });
-
-      if (lastLoginLog) {
-        await lastLoginLog.update({
-          logoutTime: new Date(),
-          sessionDuration: Math.floor((new Date() - lastLoginLog.createdAt) / 60000) // in minutes
+      if (models.LoginLog) {
+        const lastLoginLog = await models.LoginLog.findOne({
+          where: { userId, logoutTime: null },
+          order: [['createdAt', 'DESC']]
         });
+
+        if (lastLoginLog) {
+          await lastLoginLog.update({
+            logoutTime: new Date(),
+            sessionDuration: Math.floor((new Date() - lastLoginLog.createdAt) / 60000) // in minutes
+          });
+        }
       }
 
       res.json({
@@ -464,7 +468,19 @@ class AuthController {
   // OAuth Success Handler
   async oauthSuccess(req, res) {
     try {
+      console.log('OAuth success handler called');
       const user = req.user;
+
+      if (!user) {
+        console.error('No user data in OAuth success handler');
+        throw new Error('No user data received from OAuth provider');
+      }
+
+      console.log('OAuth user data:', {
+        id: user.id,
+        email: user.email,
+        role: user.role?.name
+      });
 
       // Generate tokens
       const payload = {
@@ -480,27 +496,44 @@ class AuthController {
       await user.update({ lastLogin: new Date() });
 
       // Log successful login
-      await models.LoginLog.create({
-        userId: user.id,
-        ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        loginMethod: req.authInfo?.provider || 'oauth',
-        success: true
-      });
+      if (models.LoginLog) {
+        await models.LoginLog.create({
+          userId: user.id,
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          loginMethod: req.route?.path?.includes('google') ? 'google' : 
+                       req.route?.path?.includes('github') ? 'github' :
+                       req.route?.path?.includes('microsoft') ? 'microsoft' :
+                       req.route?.path?.includes('apple') ? 'apple' : 'oauth',
+          success: true
+        });
+      }
 
       // Redirect to frontend with tokens
-      const redirectUrl = `${process.env.FRONTEND_URL}/auth/callback?token=${accessToken}&refresh=${refreshToken}`;
+      const frontendUrl = process.env.FRONTEND_URL || 'https://ntechfrontend-1i7h.vercel.app';
+      const redirectUrl = `${frontendUrl}/auth/callback?token=${accessToken}&refresh=${refreshToken}`;
+      
+      console.log('OAuth Success - Redirecting to:', redirectUrl);
       res.redirect(redirectUrl);
     } catch (error) {
       console.error('OAuth success error:', error);
-      res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+      this.oauthFailure(req, res);
     }
   }
 
   // OAuth Failure Handler
   async oauthFailure(req, res) {
-    console.error('OAuth failure:', req.query);
-    res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+    console.error('OAuth failure:', {
+      query: req.query,
+      params: req.params,
+      error: req.query.error,
+      error_description: req.query.error_description
+    });
+    
+    const frontendUrl = process.env.FRONTEND_URL || 'https://ntechfrontend-1i7h.vercel.app';
+    const errorMessage = req.query.error_description || req.query.error || 'oauth_failed';
+    
+    res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(errorMessage)}`);
   }
 }
 
